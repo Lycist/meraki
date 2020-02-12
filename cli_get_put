@@ -1,0 +1,713 @@
+#Command line script for get/put requests to a single network
+
+import requests
+
+import argparse
+
+import time
+
+import sys
+
+import os
+
+from pathlib import Path
+
+import ast
+
+import io
+
+import contextlib
+
+import datetime
+
+import errno
+
+ 
+
+file = os.path.basename(__file__)
+
+ 
+
+#API timeout delay
+
+API_EXEC_DELAY = 0.21
+
+ 
+
+#Variables
+
+l_t_d_str = ''
+
+finished_list = []
+
+retrieved_id = ''
+
+second_pass = False
+
+org_name = ''
+
+net_name = ''
+
+ 
+
+ 
+
+#python cli_get_put -k <key> -o <org> [-n <network>]
+
+#[] are optional
+
+ 
+
+#Argument parser
+
+parser = argparse.ArgumentParser(description='CLI script to GET and PUT',
+
+                                 add_help=False)
+
+required = parser.add_argument_group('Required arguments')
+
+required.add_argument("-k","--key")
+
+ 
+
+#Optional arguments
+
+parser.add_argument("-h", "--help", action='store_true')
+
+parser.add_argument("-e", "--example", action='store_true')
+
+parser.add_argument("-o", "--org",default=None)
+
+parser.add_argument("-n", "--network", default=None)
+
+parser.add_argument("-b", "--backup", action='store_true')
+
+parser.add_argument("-c", "--command", choices=['print', 'replace'],
+
+                    nargs=argparse.REMAINDER, type=str)
+
+ 
+
+#Create dictionary args
+
+args = parser.parse_args()
+
+ 
+
+#If no arguments, print help
+
+def print_help():
+
+    print('This is a script to manage firewall rulesets.')
+
+    print('')
+
+    print('To run the script, enter:')
+
+    print('python cli_get_put.py -k <key> -o <org ID> -n <network ID> -c <command>')
+
+    print('')
+
+    print('Required arguments:')
+
+    print('-k <key>                 : Your Meraki Dashboard API key')
+
+    print('')
+
+   print('Optional arguments:')
+
+    print('-e                       : Prints a list of example syntax')
+
+    print('-o <org ID>              : The ID of the orginization you want to enter')
+
+    print('                         : Run this script without -o to return all')
+
+    print('                         : Organizations that you have access to.')
+
+    print('                         : Run this with -o and not -n to return')
+
+    print('                         : all networks in an organization.')
+
+    print('-n <network ID>          : Specifies a network to work with.')
+
+    print('-b                       : Creates a backup of the firewall rules,')
+
+    print('                         : replacing a networks rules also creates')
+
+    print('                         : a backup.')
+
+    print('-c <command>             : Specify the operation to be performed.')
+
+    print(' -c print                : Returns L3 firewall rules.')
+
+    print(' -c replace <Filepath>   : Replaces L3 Firewall rules with file at <Filepath>')
+
+    print('                         : Must be in JSON formatting')
+
+   
+
+ 
+
+ 
+
+ 
+
+#Display help
+
+if args.help == True:
+
+    print_help()
+
+ 
+
+#Display examples
+
+def print_examples():
+
+    print('The following is a list of example syntax:')
+
+    print('')
+
+    print('Get all organizations:')
+
+    print('python ' + file + ' -k 1234')
+
+    print('')
+
+    print('Search for an organization:')
+
+    print('python ' + file + ' -k 1234 -o tessoro')
+
+    print('')
+
+    print('Get all networks in an organization:')
+
+    print('python ' + file + ' -k 1234 -o 4321')
+
+    print('')
+
+    print('Search for a network in an organization:')
+
+    print('python ' + file + ' -k 1234 -o tessoro -n 45123')
+
+    print('')
+
+    print('Get all layer 3 firewall rules from a network')
+
+    print('python ' + file + ' -k 1234 -n N_4321')
+
+    print('')
+
+    print('Obtain a backup of all L3 firewall rules in a network without changing anything.')
+
+    print('python ' + file + ' -k 1234 -n N_4321 -b')
+
+    print('or')
+
+    print('python ' + file + ' -k 1234 -o ace -n es12345 -b')
+
+    print('')
+
+    print('Replace all L3 firewall rules in a network, 2 examples.')
+
+    print('python ' + file + r' -k 1234 -n N_4321 -c replace "C:\Users\YOURNAME.CONTROLSCAN\Desktop\replaceL3rules.text"')
+
+    print('or')
+
+    print('python ' + file + r' -k 1234 -o smithfield -n charlotte -c replace "C:\Users\YOURNAME.CONTROLSCAN\Desktop\replaceL3rules.text"')     
+
+    
+
+    
+
+if args.example == True:
+
+    print_examples()
+
+   
+
+#HTML headers, required for api interaction
+
+headers = {
+
+    'x-cisco-meraki-api-key': args.key,
+
+    'content-type': "application/json"
+
+    }
+
+ 
+
+#No standard output
+
+class DummyFile(object):
+
+    def write(self, x): pass
+
+ 
+
+@contextlib.contextmanager
+
+def nostdout():
+
+    save_stdout = sys.stdout
+
+    sys.stdout = DummyFile()
+
+    yield
+
+    sys.stdout = save_stdout
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+#Return orglist if no org argupment provided.
+
+def return_org_list():
+
+    global l_t_d_str
+
+    time.sleep(API_EXEC_DELAY)
+
+    url = "https://api.meraki.com/api/v0/organizations/"
+
+    response = requests.request("Get", url, headers=headers)
+
+    print('')
+
+    print(response.text.replace('},', '},\n\n'))
+
+    print('')
+
+    l_t_d_str = response.text
+
+ 
+
+#Return network list.
+
+def return_network_list():
+
+    global l_t_d_str
+
+    time.sleep(API_EXEC_DELAY)
+
+    search(args.org)
+
+    url = "https://api.meraki.com/api/v0/organizations/" + str(retrieved_id) + "/networks"
+
+    response = requests.request("Get", url, headers=headers)
+
+    print('')
+
+    print(response.text.replace('},', '},\n\n'))
+
+    print('')
+
+    l_t_d_str = response.text
+
+ 
+
+#Return a networks L3 firewall rules
+
+def return_network_l3(*argv):
+
+    global second_pass
+
+    global org_name
+
+    global net_name
+
+    attempt = 0
+
+    time.sleep(API_EXEC_DELAY)
+
+    #pulls org list, parses, outputs finished_list
+
+    l_t_d('org')
+
+    #parses finished_list outputs retrieved_id
+
+    search(args.org)
+
+    second_pass = True
+
+    l_t_d('net')
+
+    search(args.network)
+
+    url = "https://api.meraki.com/api/v0/networks/" + retrieved_id + "/l3FirewallRules"
+
+    response = requests.request("Get", url, headers=headers)
+
+    if 'backup' in argv:
+
+        now = datetime.datetime.now().date()
+
+        directory = os.path.dirname(os.path.abspath(__file__))
+
+        try:
+
+            os.makedirs('backups')
+
+        except OSError as e:
+
+            if e.errno != errno.EEXIST:
+
+                raise
+
+        f_out = directory + (
+
+            r"\backups\backup of " + org_name + ' ' + net_name + ' ' + str(now)
+
+            + '.txt')
+
+        written = False
+
+        while written != True:
+
+            if Path(f_out).exists() == True:
+
+                attempt += 1
+
+            if Path(f_out).exists() == False and attempt == 0:
+
+                print('')
+
+                print('File does not exist, writting.')
+
+                print('')
+
+                with open(f_out, 'w') as fout:
+
+                    fout.write('{"rules":')
+
+                    fout.write(response.text)
+
+                    fout.write('}')
+
+                    written = True
+
+            else:
+
+                test_f_out = f_out.replace('.txt', '') + (
+
+                    '(' + str(attempt) + ')' + '.txt.')
+
+                if Path(test_f_out).exists() == True:
+
+                    pass
+
+                else:
+
+                    print('')
+
+                    print('File exists, writing as a copy.')
+
+                    print('')
+
+                    with open(test_f_out, 'w') as fout:
+
+                        fout.write('{"rules":')
+
+                        fout.write(response.text)
+
+                        fout.write('}')
+
+                        written = True
+
+                   
+
+ 
+
+        print('')
+
+        print('Creating backup at %s' % f_out)
+
+    if 'silent' in argv:
+
+        pass
+
+    else:
+
+        print('')
+
+        print(response.text.replace('},', '},\n\n'))
+
+        print('')
+
+ 
+
+#Replace a networks L3 firewall rules
+
+def replace_l3(dir_path, network=args.network):
+
+    global second_pass
+
+    global net_name
+
+    time.sleep(API_EXEC_DELAY)
+
+    imported_file = Path(r'%s' % dir_path)
+
+    payload = ''
+
+    return_network_l3('silent', 'backup')
+
+    print(imported_file)
+
+    with open(imported_file) as fin:
+
+        for line in fin.readlines():
+
+            payload += line
+
+    url = 'https://api.meraki.com/api/v0/networks/' + retrieved_id + '/l3FirewallRules'
+
+    response = requests.request("Put", url, data=payload, headers=headers)
+
+    if '400' in str(response):
+
+        print('There was a problem with the request, no changes made.')
+
+    else:
+
+        print('')
+
+#        print(response.text.replace('},', '},\n\n'))
+
+#        print('')
+
+        print('Change of %s was succesful.' % net_name)
+
+        print('')
+
+       
+
+#Function that runs through the sort feature a 2nd time (for networks)
+
+def second_pass_func(item):
+
+    global finished_list
+
+    item = item.replace('{', '')
+
+    item = item.replace('}', '')
+
+    item = item.split(',')
+
+    net = '{' + item[0] + ',' + item[2] + '}'
+
+    dict_net = ast.literal_eval(net)
+
+    finished_list.append(dict_net)
+
+   
+
+#Org/network lists to dictionary
+
+def l_t_d(dest):
+
+    global l_t_d_str
+
+    global finished_list
+
+    global second_pass
+
+ 
+
+    if 'org' in dest:
+
+        with nostdout():
+
+            return_org_list()
+
+    elif 'net' in dest:
+
+        with nostdout():
+
+            return_network_list()
+
+ 
+
+    a = l_t_d_str.replace("},", "} $")
+
+    a = a.split('$')
+
+ 
+
+    for item in a:
+
+        item = item.replace('[', '')
+
+        item = item.replace(']', '')
+
+        item = item.replace(' {', '{')
+
+        item = item.replace('} ', '}')
+
+        item = item.lower()
+
+        if second_pass == False:
+
+            b = ast.literal_eval(item)
+
+            finished_list.append(b)
+
+        if second_pass == True:
+
+            second_pass_func(item)
+
+ 
+
+#Search a returned list for string
+
+def search(search_for):
+
+    global retrieved_id
+
+    global second_pass
+
+    global org_name
+
+    global net_name
+
+    retrieved_id = []
+
+    too_long = []
+
+    found = False
+
+    if type(search_for) != int:
+
+        search_for = search_for.lower()
+
+    for d in finished_list:
+
+        if search_for in d['name']:
+
+            retrieved_id.append(d['id'])
+
+            if second_pass == False:
+
+                org_name = d['name']
+
+            if second_pass == True:
+
+                net_name = d['name']
+
+            too_long.append(d)
+
+            found = True
+
+        elif search_for == d['id']:
+
+            retrieved_id.append(search_for)
+
+            too_long.append(d)
+
+            found = True
+
+    if len(retrieved_id) > 1:
+
+        print('')
+
+        print('Multiple entries found matching that criteria, please be \
+
+be more specific.')
+
+        print('')
+
+        print(str(too_long).replace('},', '},\n\n'))
+
+        print('')
+
+        exit()
+
+    elif len(retrieved_id) == 1:
+
+        retrieved_id = str(retrieved_id)
+
+        retrieved_id = retrieved_id.replace('[','')
+
+        retrieved_id = retrieved_id.replace(']','')
+
+        retrieved_id = retrieved_id.replace("'", '')
+
+        retrieved_id = retrieved_id.capitalize()
+
+    if found == False:
+
+        print('''\nUnable to find org/network, if you are searching \
+
+for a specific network, include -o <org>, otherwise, check your spelling''')
+
+ 
+
+def main():
+
+    if len(sys.argv) == 1:
+
+        print_help()
+
+        #sys.exit(1)
+
+    else:
+
+        pass
+
+    if args.org == None and args.network == None:
+
+        return_org_list()
+
+    elif bool(args.org) == True and args.network == None:
+
+        l_t_d('org')
+
+        return_network_list()
+
+    elif (bool(args.org) == True and bool(args.network) == True
+
+               and bool(args.command) == False):
+
+        if args.backup == True:
+
+            return_network_l3('backup')
+
+        else:
+
+            return_network_l3()
+
+    elif bool(args.network) == True and args.command == 'print':
+
+        if args.backup == True:
+
+            return_network_l3('backup')
+
+        else:
+
+            return_network_l3()
+
+    elif bool(args.network) == True and 'replace' in args.command:
+
+       args.command.remove('replace')
+
+        str1 = ''.join(args.command)
+
+        replace_l3(str1)
+
+       
+
+    
+
+if __name__ == "__main__":
+
+    main()
